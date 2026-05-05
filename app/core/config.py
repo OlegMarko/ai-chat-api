@@ -1,16 +1,22 @@
-from pydantic import BaseModel
-from dotenv import load_dotenv
-import os
-
-load_dotenv()
+from pydantic_settings import BaseSettings
 
 
-class Settings(BaseModel):
-    openai_api_key: str = os.getenv("OPENAI_API_KEY")
-    model_name: str = os.getenv("MODEL_NAME", "gpt-4.1-mini")
-    max_tokens: str = os.getenv("MAX_TOKENS", 50)
-    app_env: str = os.getenv("APP_ENV", "local")
-    log_level: str = os.getenv("LOG_LEVEL", "INFO")
+class Settings(BaseSettings):
+    openai_api_key: str
+
+    model_name: str = "gpt-4.1-mini"
+    max_tokens: int = 50
+    timeout: int = 10
+    retries: int = 3
+    delay: float = 0.1
+
+    price_per_1k_tokens: float = 0.0005
+
+    app_env: str = "local"
+    log_level: str = "INFO"
+
+    class Config:
+        env_file = ".env"
 
 
 settings = Settings()
