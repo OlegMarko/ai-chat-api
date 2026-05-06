@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     app_env: str = "local"
     log_level: str = "INFO"
 
+    redis_url: str = "redis://localhost:6379/0"
+    history_ttl: int = 3600
+    history_max_len: int = 20
+
     class Config:
         env_file = ".env"
 
