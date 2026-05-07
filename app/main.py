@@ -2,7 +2,7 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.api import chat_router
+from app.api import chat_router, rag_router
 from app.core import LLMServiceError, settings
 from app.core.logging import setup_logging
 
@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 app.include_router(chat_router)
+app.include_router(rag_router)
 
 
 @app.exception_handler(LLMServiceError)

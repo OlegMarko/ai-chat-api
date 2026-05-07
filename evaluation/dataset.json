@@ -1,0 +1,16 @@
+[
+  {
+    "question": "What is RAG?",
+    "expected_answer": "Retrieval-Augmented Generation",
+    "expected_sources": [
+      "rag_intro.pdf"
+    ]
+  },
+  {
+    "question": "What is pgvector?",
+    "expected_answer": "PostgreSQL vector extension",
+    "expected_sources": [
+      "pgvector_docs.pdf"
+    ]
+  }
+]

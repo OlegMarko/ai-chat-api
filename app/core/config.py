@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     history_ttl: int = 3600
     history_max_len: int = 20
 
+    database_url: str = "postgresql://postgres:postgres@localhost:5432/rag_db"
+
     class Config:
         env_file = ".env"
 

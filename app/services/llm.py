@@ -3,6 +3,7 @@ import time
 from openai import OpenAI
 from app.core import settings, LLMServiceError
 from app.services.history import get_history, add_message
+from app.services.history_builder import build_token_aware_history
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +17,7 @@ def calculate_cost(total_tokens: int) -> float:
 def generate_response(message: str, session_id: str) -> str:
     logger.info(f"Generating response | message_length={len(message)}")
     history = get_history(session_id)
+    history = build_token_aware_history(history, max_tokens=1000)
 
     messages = [
         {"role": "system", "content": "You are a helpful assistant"},
