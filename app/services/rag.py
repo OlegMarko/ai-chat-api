@@ -1,112 +1,113 @@
-from collections import defaultdict
+from __future__ import annotations
 
-from app.services.embeddings import embed_texts
+from collections import defaultdict
+from typing import Any
+
+from openai import AsyncOpenAI
+from redis.asyncio import Redis
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import settings
 from app.services.llm import generate_response
+from app.services.reranker import rerank
 from app.services.retrieval import retrieve
 from app.services.tokenizer import count_tokens
-from app.services.reranker import rerank
 
 
-MAX_CONTEXT_TOKENS = 1500
-MAX_PER_SOURCE = 2
-
-
-def init_store(texts: list[str]):
-    global vector_store
-
-    vectors = embed_texts(texts)
-    dim = len(vectors[0])
-
-    vector_store = VectorStore(dim)
-    vector_store.add(vectors, texts)
-
-
-def ingest_document(text: str, source: str):
-    chunks = chunk_text(text)
-
-    vectors = embed_texts(chunks)
-
-    metadata = [{"source": source, "chunk_id": i} for i in range(len(chunks))]
-
-    vector_store.add(vectors, chunks, metadata)
-
-
-def normalize(text: str) -> str:
+def _normalize(text: str) -> str:
     return " ".join(text.lower().strip().split())
 
 
-def rag_query(question: str, session_id: str):
-    docs = retrieve(question, limit=20)
-
-    docs = rerank(question, docs, top_k=5)
-
-    seen_keys = set()
-    seen_texts = set()
-
-    source_count = defaultdict(int)
-
-    filtered_docs = []
-    total_tokens = 0
+def _pack_documents(
+    docs: list[dict[str, Any]],
+    *,
+    max_chunks: int,
+    max_tokens: int,
+    max_per_source: int,
+) -> list[dict[str, Any]]:
+    seen_keys: set[tuple[str, int]] = set()
+    seen_texts: set[str] = set()
+    per_source = defaultdict(int)
+    out: list[dict[str, Any]] = []
+    total = 0
 
     for doc in docs:
-        source = doc["metadata"]["source"]
-        chunk_id = doc["metadata"]["chunk_id"]
-        text = doc["text"]
+        meta = doc["metadata"]
+        source = meta["source"]
+        chunk_id = int(meta["chunk_id"])
+        body = str(doc["text"])
 
-        key = (source, chunk_id)
-        norm_text = normalize(text)
+        key = (str(source), chunk_id)
+        norm = _normalize(body)
 
         if key in seen_keys:
             continue
+        seen_keys.add(key)
 
-        if norm_text in seen_texts:
+        if norm in seen_texts:
+            continue
+        seen_texts.add(norm)
+
+        if per_source[str(source)] >= max_per_source:
             continue
 
-        if source_count[source] >= MAX_PER_SOURCE:
-            continue
-
-        tokens = count_tokens(text)
-
-        if total_tokens + tokens > MAX_CONTEXT_TOKENS:
+        t = count_tokens(body)
+        if total + t > max_tokens:
+            break
+        if len(out) >= max_chunks:
             break
 
-        seen_keys.add(key)
-        seen_texts.add(norm_text)
-        source_count[source] += 1
+        out.append(doc)
+        total += t
+        per_source[str(source)] += 1
 
-        filtered_docs.append(doc)
-        total_tokens += tokens
+    return out
 
-    context = "\n\n".join(doc["text"] for doc in filtered_docs)
 
-    prompt = f"""
-You are a helpful AI assistant.
+async def rag_query(
+    *,
+    session: AsyncSession,
+    openai_client: AsyncOpenAI,
+    redis: Redis,
+    question: str,
+    session_id: str,
+) -> dict[str, Any]:
+    pool = await retrieve(
+        session, embedding_client=openai_client, question=question.strip(), limit=None
+    )
 
-Answer ONLY using the provided context.
+    k = min(settings.retrieval_rerank_top_k, len(pool)) if pool else 0
+    reranked = await rerank(question, pool, top_k=k) if k else []
 
-If unsure, say you don't know.
+    packed = _pack_documents(
+        reranked,
+        max_chunks=settings.rag_context_max_chunks,
+        max_tokens=settings.rag_context_max_tokens,
+        max_per_source=settings.rag_max_per_source,
+    )
 
-Context:
-{context}
+    context = "\n\n".join(str(d["text"]) for d in packed)
 
-Question:
-{question}
-"""
+    user_message = (
+        "You answer strictly from the excerpts below. If they are insufficient, say you do not know.\n\n"
+        f"Excerpts:\n{context}\n\n"
+        f"Question:\n{question.strip()}"
+    )
 
-    answer = generate_response(
-        prompt,
+    answer = await generate_response(
+        redis=redis,
+        client=openai_client,
         session_id=session_id,
+        message=user_message,
+        rag_mode=True,
     )
 
     sources = [
         {
-            "source": doc["metadata"]["source"],
-            "snippet": doc["text"][:200],
+            "source": str(d["metadata"]["source"]),
+            "snippet": str(d["text"])[:240],
         }
-        for doc in filtered_docs
+        for d in packed
     ]
 
-    return {
-        "answer": answer,
-        "sources": sources,
-    }
+    return {"answer": answer, "sources": sources}

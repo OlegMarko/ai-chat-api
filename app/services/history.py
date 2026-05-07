@@ -1,32 +1,43 @@
 import json
-import redis
-from typing import List, Dict
-from app.core import settings
+from typing import Any
 
-client = redis.Redis.from_url(settings.redis_url, decode_responses=True)
+from redis.asyncio import Redis
+
+from app.core.config import settings
 
 
 def _key(session_id: str) -> str:
-    return f"chat:{session_id}"
+    return f"chat:v1:{session_id}"
 
 
-def get_history(session_id: str) -> List[Dict[str, str]]:
-    raw = client.lrange(_key(session_id), 0, -1)
+async def get_history(redis: Redis, session_id: str) -> list[dict[str, Any]]:
+    raw = await redis.lrange(_key(session_id), 0, -1)
+    parsed: list[dict[str, Any]] = []
+    for item in raw:
+        parsed.append(json.loads(item))
+    return parsed
 
-    return [json.loads(item) for item in raw]
 
-
-def add_message(session_id: str, role: str, content: str):
-    key = _key(session_id)
-    if len(content) > 5000:
-        content = content[:5000]
+async def add_message(
+    redis: Redis,
+    session_id: str,
+    role: str,
+    content: str,
+) -> None:
+    cap = settings.history_message_byte_cap
+    if len(content.encode("utf-8")) > cap:
+        content_bytes = content.encode("utf-8")[:cap]
+        content = content_bytes.decode("utf-8", errors="ignore")
 
     message = json.dumps({"role": role, "content": content})
 
-    client.rpush(key, message)
-    client.ltrim(key, -settings.history_max_len, -1)
-    client.expire(key, settings.history_ttl)
+    await redis.rpush(_key(session_id), message)
+
+    maxlen = settings.history_max_messages
+    await redis.ltrim(_key(session_id), -maxlen, -1)
+
+    await redis.expire(_key(session_id), settings.history_ttl_seconds)
 
 
-def clear_history(session_id: str):
-    client.delete(_key(session_id))
+async def clear_history(redis: Redis, session_id: str) -> None:
+    await redis.delete(_key(session_id))

@@ -1,28 +1,43 @@
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from openai import AsyncOpenAI
+
+from app.core.config import settings
 from app.repositories.vector_repository import VectorRepository
-from app.services.embeddings import embed_texts
+from app.services.embeddings import embed_query
 
-repo = VectorRepository()
+_VECTOR_REPOSITORY = VectorRepository()
 
 
-def retrieve(question: str, limit=10):
-    query_embedding = embed_texts([question])[0]
+async def retrieve(
+    session: AsyncSession,
+    *,
+    embedding_client: AsyncOpenAI,
+    question: str,
+    limit: int | None = None,
+) -> list[dict]:
+    resolved_limit = limit if limit is not None else settings.retrieval_ann_limit
 
-    rows = repo.similarity_search(
-        embedding=query_embedding,
-        limit=limit,
+    query_vector = await embed_query(embedding_client, question)
+
+    rows = await _VECTOR_REPOSITORY.similarity_search(
+        session,
+        embedding=query_vector,
+        limit=resolved_limit,
     )
 
-    docs = []
+    print("*" * 10)
+    print(rows)
+    print("*" * 10)
 
+    out: list[dict] = []
     for row in rows:
-        docs.append(
+        out.append(
             {
                 "text": row.content,
-                "metadata": {
-                    "source": row.source,
-                    "chunk_id": row.chunk_id,
-                },
-            }
+                "metadata": {"source": row.source, "chunk_id": row.chunk_id},
+                "distance": getattr(row, "distance", None),
+            },
         )
 
-    return docs
+    return out

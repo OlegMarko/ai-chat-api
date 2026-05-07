@@ -4,75 +4,94 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-
-    container_name: ai-rag-api
-
+    container_name: ai-chat-api
     restart: unless-stopped
-
     ports:
       - "8000:8000"
-
     env_file:
       - .env
+
+    environment:
+      APP_ENV: development
+      PYTHONUNBUFFERED: 1
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/rag_db
+      REDIS_URL: redis://redis:6379/0
+      LLM_PROVIDER: ollama
+      OLLAMA_BASE_URL: http://ollama:11434
+      OPENAI_API_BASE: http://ollama:11434/v1
 
     depends_on:
       postgres:
         condition: service_healthy
-
       redis:
         condition: service_healthy
-
+      ollama:
+        condition: service_started
     volumes:
-      - ./:/app
+      - ./:/srv
+    working_dir: /srv
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health/ready" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-    command: >
-      uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-
-  ostgres:
+  postgres:
     image: pgvector/pgvector:pg18
-
-    container_name: ai-rag-postgres
-
+    container_name: ai-chat-postgres
     restart: unless-stopped
-
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: rag_db
-
     ports:
       - "5432:5432"
-
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql
+    command: >
+      postgres -c shared_buffers=256MB -c max_connections=200 -c shared_preload_libraries=vector
 
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U postgres" ]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
   redis:
     image: redis:8-alpine
-
-    container_name: ai-rag-redis
-
+    container_name: ai-chat-redis
     restart: unless-stopped
-
     ports:
       - "6379:6379"
-
-    command: redis-server --appendonly yes
-
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
     volumes:
       - redis_data:/data
-
     healthcheck:
       test: [ "CMD", "redis-cli", "ping" ]
       interval: 5s
       timeout: 3s
+      retries: 10
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ai-chat-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      OLLAMA_KEEP_ALIVE: 25m
+      OLLAMA_NUM_PARALLEL: 1
+      OLLAMA_MAX_LOADED_MODELS: 1
+    healthcheck:
+      test: [ "CMD", "ollama", "list" ]
+      interval: 30s
+      timeout: 10s
       retries: 5
 
 volumes:
   postgres_data:
   redis_data:
+  ollama_data:

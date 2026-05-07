@@ -1,38 +1,54 @@
-from sqlalchemy import text
+import logging
 
-from app.db.database import SessionLocal
+from sqlalchemy import Row, select, delete, text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import settings
 from app.db.models import DocumentChunk
+
+logger = logging.getLogger(__name__)
 
 
 class VectorRepository:
-    def __init__(self):
-        self.db = SessionLocal()
-
-    def insert_chunks(self, rows):
-        self.db.bulk_save_objects(rows)
-        self.db.commit()
-
-    def similarity_search(self, embedding, limit=5):
-        sql = text(
-            """
-            SELECT
-                id,
-                source,
-                chunk_id,
-                content,
-                embedding <=> :embedding AS distance
-            FROM document_chunks
-            ORDER BY embedding <=> :embedding
-            LIMIT :limit
-            """
+    async def similarity_search(
+        self,
+        session: AsyncSession,
+        *,
+        embedding: list[float],
+        limit: int = 64,
+        ef_search_hint: int | None = None,
+    ):
+        ef_value = int(
+            ef_search_hint
+            if ef_search_hint is not None
+            else settings.hnsw_ef_search
         )
 
-        result = self.db.execute(
-            sql,
-            {
-                "embedding": embedding,
-                "limit": limit,
-            },
+        await session.execute(
+            text(f"SET LOCAL hnsw.ef_search = {ef_value}")
         )
 
-        return result.fetchall()
+        stmt = (
+            select(
+                DocumentChunk.id,
+                DocumentChunk.source,
+                DocumentChunk.chunk_id,
+                DocumentChunk.content,
+                DocumentChunk.embedding.cosine_distance(embedding).label(
+                    "distance"
+                ),
+            )
+            .order_by(
+                DocumentChunk.embedding.cosine_distance(embedding)
+            )
+            .limit(limit)
+        )
+
+        result = await session.execute(stmt)
+
+        return list(result.fetchall())
+
+    async def delete_source(self, session: AsyncSession, source: str) -> None:
+        await session.execute(
+            delete(DocumentChunk).where(DocumentChunk.source == source)
+        )
